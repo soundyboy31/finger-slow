@@ -347,37 +347,47 @@
     margin-top: 4px;
   }
 
-  /* ── NICKNAME INPUT ── */
-  #nickname-screen {
-    gap: 20px;
+  /* ── LOGIN SCREEN ── */
+  #login-screen {
+    gap: 16px;
   }
-  #nickname-screen h3 {
+  #login-screen h3 {
     font-size: clamp(0.9rem, 3.5vw, 1.3rem);
     letter-spacing: 0.2em;
     color: var(--cyan);
     text-shadow: 0 0 15px var(--cyan);
+  }
+  #email-input:focus, #nickname-input:focus {
+    border-color: var(--cyan);
+    box-shadow: 0 0 12px rgba(0,255,247,0.2);
+  }
+  #email-input::placeholder, #nickname-input::placeholder {
+    color: rgba(255,255,255,0.2);
   }
   #nickname-input {
     background: transparent;
     border: 1.5px solid rgba(255,255,255,0.2);
     color: #fff;
     font-family: 'Share Tech Mono', monospace;
-    font-size: clamp(1rem, 3.5vw, 1.3rem);
+    font-size: clamp(0.85rem, 3vw, 1.1rem);
     letter-spacing: 0.15em;
     padding: 12px 20px;
     text-align: center;
     outline: none;
-    width: 220px;
+    width: 280px;
     border-radius: 2px;
     transition: border-color 0.3s;
   }
-  #nickname-input:focus {
-    border-color: var(--cyan);
-    box-shadow: 0 0 12px rgba(0,255,247,0.2);
+  #title-account {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(0.5rem, 1.8vw, 0.6rem);
+    opacity: 0.35;
+    letter-spacing: 0.12em;
+    text-align: center;
+    cursor: pointer;
+    transition: opacity 0.2s;
   }
-  #nickname-input::placeholder {
-    color: rgba(255,255,255,0.2);
-  }
+  #title-account:hover { opacity: 0.6; }
 
   /* ── SCANLINE overlay ── */
   #scanlines {
@@ -449,13 +459,22 @@
   <p>KEEP YOUR FINGER ON THE CORE.<br>IF YOU LIFT — YOU LOSE.<br>HOW LONG CAN YOU HOLD?</p>
   <button class="btn" id="start-btn">BEGIN CHALLENGE</button>
   <button class="btn" id="leaderboard-btn" style="border-color: rgba(255,255,255,0.15); color: rgba(255,255,255,0.4); box-shadow: none; font-size: clamp(0.5rem,1.8vw,0.65rem);">GLOBAL RANKING</button>
+  <div id="title-account"></div>
 </div>
 
-<!-- NICKNAME SCREEN -->
-<div class="screen hidden" id="nickname-screen">
-  <h3>ENTER NICKNAME</h3>
-  <input type="text" id="nickname-input" maxlength="12" placeholder="YOUR NAME" autocomplete="off" spellcheck="false">
-  <button class="btn" id="nickname-confirm-btn">CONFIRM</button>
+<!-- LOGIN SCREEN -->
+<div class="screen hidden" id="login-screen">
+  <h3>SIGN IN</h3>
+  <p style="font-family:'Share Tech Mono',monospace;font-size:clamp(0.5rem,1.8vw,0.65rem);opacity:0.35;letter-spacing:0.15em;text-align:center;max-width:260px;line-height:1.8;">YOUR SCORES SYNC ACROSS ALL DEVICES</p>
+  <input type="email" id="email-input" maxlength="60" placeholder="YOUR EMAIL" autocomplete="email" spellcheck="false" style="
+    background:transparent;border:1.5px solid rgba(255,255,255,0.2);color:#fff;
+    font-family:'Share Tech Mono',monospace;font-size:clamp(0.8rem,2.8vw,1rem);
+    letter-spacing:0.08em;padding:12px 20px;text-align:center;outline:none;
+    width:280px;border-radius:2px;transition:border-color 0.3s;
+  ">
+  <input type="text" id="nickname-input" maxlength="12" placeholder="NICKNAME" autocomplete="off" spellcheck="false">
+  <button class="btn" id="login-confirm-btn">PLAY</button>
+  <div id="login-error" style="font-family:'Share Tech Mono',monospace;font-size:clamp(0.5rem,1.8vw,0.6rem);color:#ff2d55;letter-spacing:0.15em;opacity:0;height:16px;transition:opacity 0.3s;"></div>
 </div>
 
 <!-- DEATH SCREEN -->
@@ -597,6 +616,7 @@ let deathCounter = 0;
 let reviveUsedThisSession = false;
 let reviveElapsed = 0;
 let nickname = localStorage.getItem('finger_nickname') || '';
+let userEmail = localStorage.getItem('finger_email') || '';
 let userCountryCode = '';
 let bestScore = parseInt(localStorage.getItem('finger_best') || '0', 10);
 
@@ -625,8 +645,11 @@ const leaderboardScreen = document.getElementById('leaderboard-screen');
 const leaderboardList = document.getElementById('leaderboard-list');
 const myRankDisplay = document.getElementById('my-rank-display');
 const weeklyCountdown = document.getElementById('weekly-countdown');
-const nicknameScreen = document.getElementById('nickname-screen');
+const loginScreen = document.getElementById('login-screen');
+const emailInput = document.getElementById('email-input');
 const nicknameInput = document.getElementById('nickname-input');
+const loginError = document.getElementById('login-error');
+const titleAccount = document.getElementById('title-account');
 const shareCanvas = document.getElementById('share-canvas');
 
 function resize() {
@@ -1066,6 +1089,8 @@ function showDeathScreen(isWin = false) {
     bestScore = currentMs;
     localStorage.setItem('finger_best', String(bestScore));
     bestScoreDisplay.textContent = 'NEW BEST: ' + fmtMinSec(bestScore);
+    // Sync best to Supabase account
+    updatePlayerBest(getTotalSeconds(bestScore));
   } else {
     bestScoreDisplay.textContent = 'BEST: ' + fmtMinSec(bestScore);
   }
@@ -1111,6 +1136,7 @@ function initGameState() {
   deathScreen.classList.add('hidden');
   reviveOverlay.classList.add('hidden');
   leaderboardScreen.classList.add('hidden');
+  loginScreen.classList.add('hidden');
 
   // Show onboarding ghost hand
   onboarding.classList.remove('hidden');
@@ -1119,9 +1145,13 @@ function initGameState() {
 function startProcess() {
   ensureAudio();
 
-  // Check nickname
-  if (!nickname) {
-    showNicknameScreen(() => {
+  // Re-read from localStorage
+  if (!userEmail) userEmail = localStorage.getItem('finger_email') || '';
+  if (!nickname) nickname = localStorage.getItem('finger_nickname') || '';
+
+  // Need login?
+  if (!userEmail || !nickname) {
+    showLoginScreen(() => {
       initGameState();
       requestAnimationFrame(loop);
     });
@@ -1132,27 +1162,153 @@ function startProcess() {
   requestAnimationFrame(loop);
 }
 
-function showNicknameScreen(callback) {
+let _loginCallback = null;
+
+function showLoginScreen(callback) {
+  _loginCallback = callback;
   titleScreen.classList.add('hidden');
   deathScreen.classList.add('hidden');
-  nicknameScreen.classList.remove('hidden');
+  loginScreen.classList.remove('hidden');
+  emailInput.value = userEmail;
   nicknameInput.value = nickname;
-  nicknameInput.focus();
-
-  const confirm = () => {
-    const val = nicknameInput.value.trim().toUpperCase();
-    if (val.length < 2) {
-      nicknameInput.style.borderColor = '#ff2d55';
-      return;
-    }
-    nickname = val;
-    localStorage.setItem('finger_nickname', nickname);
-    nicknameScreen.classList.add('hidden');
-    document.getElementById('nickname-confirm-btn').removeEventListener('click', confirm);
-    callback();
-  };
-  document.getElementById('nickname-confirm-btn').addEventListener('click', confirm);
+  emailInput.focus();
+  loginError.style.opacity = '0';
 }
+
+function showLoginError(msg) {
+  loginError.textContent = msg;
+  loginError.style.opacity = '1';
+}
+
+async function confirmLogin() {
+  const email = emailInput.value.trim().toLowerCase();
+  const nick = nicknameInput.value.trim().toUpperCase();
+
+  // Validate email
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    emailInput.style.borderColor = '#ff2d55';
+    showLoginError('ENTER A VALID EMAIL');
+    return;
+  }
+  // Validate nickname
+  if (nick.length < 2) {
+    nicknameInput.style.borderColor = '#ff2d55';
+    showLoginError('NICKNAME: 2 CHARS MIN');
+    return;
+  }
+
+  userEmail = email;
+  nickname = nick;
+
+  try {
+    localStorage.setItem('finger_email', userEmail);
+    localStorage.setItem('finger_nickname', nickname);
+  } catch(e) {}
+
+  // Try to find existing account by email in Supabase
+  await syncAccountFromEmail();
+
+  loginScreen.classList.add('hidden');
+  updateTitleAccount();
+
+  if (_loginCallback) {
+    _loginCallback();
+    _loginCallback = null;
+  }
+}
+
+// Sync account: if this email already exists in Supabase, load their player_id and best score
+async function syncAccountFromEmail() {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/players?email=eq.${encodeURIComponent(userEmail)}&select=*`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    const rows = await res.json();
+
+    if (rows.length > 0) {
+      // Existing account found — restore their player_id and best score
+      const account = rows[0];
+      playerId = account.player_id;
+      localStorage.setItem('finger_player_id', playerId);
+      nickname = account.nickname || nickname;
+      localStorage.setItem('finger_nickname', nickname);
+
+      if (account.best_seconds > bestScore / 1000) {
+        bestScore = account.best_seconds * 1000;
+        localStorage.setItem('finger_best', String(bestScore));
+      }
+    } else {
+      // New account — register this email with current player_id
+      await fetch(`${SUPABASE_URL}/rest/v1/players`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          player_id: playerId,
+          email: userEmail,
+          nickname: nickname,
+          best_seconds: Math.floor(bestScore / 1000),
+          created_at: new Date().toISOString(),
+        }),
+      });
+    }
+  } catch(e) {
+    // Offline — continue with local data
+  }
+}
+
+// Update player record in Supabase when best score changes
+async function updatePlayerBest(totalSeconds) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/players?player_id=eq.${playerId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        nickname: nickname,
+        best_seconds: totalSeconds,
+      }),
+    });
+  } catch(e) {}
+}
+
+function updateTitleAccount() {
+  if (userEmail && nickname) {
+    titleAccount.textContent = nickname + ' · ' + userEmail;
+    titleAccount.onclick = logout;
+  } else {
+    titleAccount.textContent = '';
+  }
+}
+
+function logout() {
+  if (!confirm('Sign out? Your local scores will be kept.')) return;
+  userEmail = '';
+  nickname = '';
+  localStorage.removeItem('finger_email');
+  localStorage.removeItem('finger_nickname');
+  updateTitleAccount();
+}
+
+document.getElementById('login-confirm-btn').addEventListener('click', confirmLogin);
+emailInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') nicknameInput.focus();
+});
+nicknameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') confirmLogin();
+});
+
+// Show account on title screen at startup
+updateTitleAccount();
 
 // ── TOUCH/INPUT ──
 function getPos(e) {
@@ -1335,8 +1491,8 @@ function generateShareImage() {
 }
 
 // ── SUPABASE LEADERBOARD ──
-const SUPABASE_URL = 'https://nhhuoyqugcaoxznaguww.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oaHVveXF1Z2Nhb3h6bmFndXd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3OTc1ODcsImV4cCI6MjA5MDM3MzU4N30.DZsEj6d8Kn8Uevls8Wrk-RiGOvunb7J74-xrvROREts';
+const SUPABASE_URL = 'https://YOUR_SUPABASE_URL.supabase.co';
+const SUPABASE_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 // Get current week's Monday 00:00 UTC as the week identifier
 function getCurrentWeekStart() {
